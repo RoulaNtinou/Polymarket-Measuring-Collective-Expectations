@@ -1,0 +1,16 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local editor settings
+.vscode/
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+
+# Logs
+*.log
+history_log.txt
+
+# Backup files
+*_backup.csv
