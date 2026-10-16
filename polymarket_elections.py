@@ -22,17 +22,7 @@ ELECTION_TYPES = [
     "Global Elections"
 ]
 
-url = "https://gamma-api.polymarket.com/markets"
 
-params = {
-    "limit": 100,
-    "active": True
-}
-
-response = requests.get(url, params=params)
-response.raise_for_status()
-
-markets = response.json()
 
 
 def get_price_history(token, days=7, chunk_days=7):

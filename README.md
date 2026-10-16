@@ -67,7 +67,7 @@ streamlit run app.py
 
 The application should open in your browser. If it does not, use the local URL displayed in the terminal.
 
-**Note:** The instructions above assume that `requirements.txt` exists and that the repository includes the necessary application files and historical data. We will verify these before considering the setup instructions final.
+**Note:** The instructions above assume that `requirements.txt` exists and that the repository includes the necessary application files and historical data.
 
 ## Project Structure
 
