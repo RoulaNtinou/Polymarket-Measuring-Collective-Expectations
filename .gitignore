@@ -1,3 +1,4 @@
+
 # Python cache files
 __pycache__/
 *.py[cod]
@@ -14,3 +15,16 @@ history_log.txt
 
 # Backup files
 *_backup.csv
+election_market_history_version*.csv
+
+# Local analysis outputs
+Untitled-1.ipynb
+candidate_daily_rank.csv
+candidate_history.csv
+daily_leader.csv
+daily_leader_gap.csv
+election_daily_summary.csv
+election_data.csv
+election_summary.csv
+rank_movement_summary.csv
+data/
