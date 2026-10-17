@@ -7,12 +7,15 @@ import logging
 import streamlit as st
 
 logging.basicConfig(
-    filename="election_history.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("election_history.log"),
+        logging.StreamHandler()
+    ]
 )
 
-
+logger = logging.getLogger(__name__)
 
 ELECTION_TYPES = [
     "US Presidential",
@@ -155,6 +158,7 @@ def get_price_history(token, days=7, chunk_days=7):
 
 def get_election_markets():
 
+
     url = "https://gamma-api.polymarket.com/markets"
 
     all_markets = []
@@ -169,13 +173,45 @@ def get_election_markets():
             "active": True
         }
 
-        response = requests.get(
-            url,
-            params=params
-        )
+        response = None
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    url,
+                    params=params,
+                    timeout=30
+                )
+                response.raise_for_status()
+                break
+
+            except requests.exceptions.RequestException as e:
+
+                if (
+                        isinstance(e, requests.exceptions.HTTPError)
+                        and e.response is not None
+                        and e.response.status_code == 422
+                    ):
+                        response = e.response
+                        break
+                logger.warning(
+                    "API request failed (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    e
+                )
+
+                if attempt == max_retries - 1:
+                    logger.error("API request failed after all retries.")
+                    raise
+                time.sleep(2 ** (attempt + 1))
 
         if response.status_code == 422:
-            print(f"API stopped pagination at offset {offset}")
+            logger.warning(
+                "API stopped pagination at offset %s",
+                offset
+            )
             break
 
         response.raise_for_status()
@@ -187,9 +223,10 @@ def get_election_markets():
 
         all_markets.extend(markets)
 
-        print(
-            f"Retrieved {len(markets)} markets "
-            f"(total: {len(all_markets)})"
+        logger.info(
+            "Retrieved %s markets (total: %s)",
+            len(markets),
+            len(all_markets)
         )
 
         if len(markets) < limit:
@@ -215,21 +252,13 @@ def get_election_markets():
 
             election_markets.append(market)
 
-    # -------------------------
     # Summary output
-    # -------------------------
 
-    print(
-        f"\nAPI stopped pagination at offset {offset}"
-    )
+    logger.info("API pagination finished at offset %s", offset)
 
-    print(
-        f"Total markets retrieved: {len(all_markets)}"
-    )
+    logger.info("Total markets retrieved: %s", len(all_markets))
 
-    print(
-        f"Election markets found: {len(election_markets)}"
-    )
+    logger.info("Election markets found: %s", len(election_markets))
 
     return election_markets
 
@@ -2792,10 +2821,27 @@ def capture_and_update_election_history(
         capture_date=capture_date
     )
 
-    if daily_snapshot.empty:
-        print("No election market data captured.")
-        return load_election_history(history_filepath)
 
+    if daily_snapshot.empty:
+        logger.warning("No election market data captured.")
+        return load_election_history(history_filepath)
+    if daily_snapshot["market_id"].isna().any():
+        raise ValueError(
+            "Snapshot contains missing market IDs. "
+            "Historical data was not updated."
+        )
+
+    if daily_snapshot["market_id"].duplicated().any():
+        raise ValueError(
+            "Snapshot contains duplicate market IDs. "
+            "Historical data was not updated."
+        )
+
+    if len(daily_snapshot) < len(election_df) * 0.9:
+        raise ValueError(
+            "Snapshot contains fewer than 90% of prepared markets. "
+            "Historical data was not updated."
+        )
     # ------------------------------------------------
     # Load existing history
     # ------------------------------------------------
