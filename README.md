@@ -1,3 +1,7 @@
+![Polymarket Elections Dashboard](assets/Site-Statistics.gif)
+
+
+
 # Polymarket — Measuring Collective Expectations
 
 An interactive data analytics dashboard for exploring election prediction markets, tracking implied probabilities, and monitoring how collective expectations evolve over time.
