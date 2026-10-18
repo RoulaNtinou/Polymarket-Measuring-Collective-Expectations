@@ -2472,7 +2472,7 @@ def capture_election_market(election_df, capture_date=None):
     # ------------------------------------------------
 
     if capture_date is None:
-        capture_date = pd.Timestamp.now().normalize()
+        capture_date = pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
     else:
         capture_date = pd.to_datetime(capture_date).normalize()
 
@@ -4888,1244 +4888,1219 @@ def get_homepage_market_summary(df):
     }
 
 
-
-markets = get_election_markets()
-
-
+if False:
+    markets = get_election_markets()
 
 
-election_df = prepare_election_markets(markets)
-
-capture_and_update_election_history(election_df)
 
 
-event_check = (
-    election_df
-    .groupby("negRiskMarketID")
-    .agg(
-        n_markets=("market_id", "nunique"),
-        n_candidates=("candidate", "nunique")
+    election_df = prepare_election_markets(markets)
+
+    capture_and_update_election_history(election_df)
+
+
+    event_check = (
+        election_df
+        .groupby("negRiskMarketID")
+        .agg(
+            n_markets=("market_id", "nunique"),
+            n_candidates=("candidate", "nunique")
+        )
+        .reset_index()
     )
-    .reset_index()
-)
 
 
 
 
 
-candidate_df = election_df[
-    election_df["market_type"] == "candidate"
-].copy()
-
-
-
-
-global_df = election_df[
-    election_df["election_type"] == "Global Elections"
-].copy()
-
-
-
-elections = election_df[
-    election_df["election_type"] != "Other"
-].copy()
-
-
-
-
-global_elections = election_df[
-    election_df["election_type"] == "Global Elections"
-].copy()
-
-dem_election_df = election_df[
-    (
+    candidate_df = election_df[
         election_df["market_type"] == "candidate"
-    )
-    &
-    (
-        election_df["market_name"].str.contains(
-            "2028 Democratic presidential nomination",
-            case=False,
-            na=False
-        )
-    )
-].copy()
-
-all_history_df = get_all_election_history(
-    dem_election_df,
-    days=7
-)
-all_history_df["election_group"] = all_history_df["market_name"].apply(
-    lambda x: "2028 Democratic presidential nomination"
-    if "2028 Democratic presidential nomination" in str(x)
-    else None
-)
-
-
-event_daily_check = (
-    all_history_df
-    .groupby(["negRiskMarketID", "date"])
-    .agg(
-        n_candidates=("candidate", "nunique"),
-        total_probability=("probability", "sum"),
-        min_probability=("probability", "min"),
-        max_probability=("probability", "max"),
-        missing_probability=("probability", lambda x: x.isna().sum())
-    )
-    .reset_index()
-)
-
-event_daily_check["difference_from_100"] = (
-    event_daily_check["total_probability"] - 100
-)
-
-event_daily_check["abs_difference"] = (
-    event_daily_check["difference_from_100"].abs()
-)
-
-
-aggregate_history_df = all_history_df[
-    all_history_df["market_type"] == "aggregate"
-].copy()
-
-
-candidate_history_df = all_history_df[
-    all_history_df["market_type"] == "candidate"
-].copy()
-
-##final_df = all_history_df.merge(
-   ##election_df[
-        ##[
-           ## "market_id",
-            ##"election_country",
-            ##"volume",
-            ##"liquidity"
-        ##]
-    ##],
-    ##on="market_id",
-    ##how="left"
-##)
-
-
-candidate_history_df["election_group"] = (
-    candidate_history_df["event"]
-    .str.replace(
-        r"Will .*? win the ",
-        "",
-        regex=True
-    )
-    .str.replace(
-        "?",
-        "",
-        regex=False
-    )
-    .str.strip()
-)
-
-
-candidate_summary = (
-    candidate_history_df
-    .sort_values("date")
-    .groupby(
-        [
-            "election_country",
-            "event",
-            "candidate"
-        ]
-    )["probability"]
-    .agg(
-        mean_probability="mean",
-        min_probability="min",
-        max_probability="max",
-        first_probability="first",
-        last_probability="last"
-    )
-    .reset_index()
-)
-
-
-candidate_summary["change_pp"] = (
-    candidate_summary["last_probability"]
-    - candidate_summary["first_probability"]
-)
-
-
-candidate_summary = candidate_summary.sort_values(
-    "last_probability",
-    ascending=False
-)
-
-
-candidate_daily_rank = (
-    candidate_history_df
-    .copy()
-    .sort_values(
-        [
-            "election_country",
-            "election_group",
-            "date",
-            "probability"
-        ],
-        ascending=[True, True, True, False]
-    )
-)
-
-candidate_daily_rank["rank"] = (
-    candidate_daily_rank
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "date"
-        ]
-    )["probability"]
-    .rank(
-        method="min",
-        ascending=False
-    )
-    .astype(int)
-)
-
-daily_leaders = (
-    candidate_daily_rank[
-        candidate_daily_rank["rank"] == 1
-    ]
-    [
-        [
-            "date",
-            "election_country",
-            "election_group",
-            "candidate",
-            "probability"
-        ]
-    ]
-    .rename(
-        columns={
-            "candidate": "leader",
-            "probability": "leader_probability"
-        }
-    )
-    .copy()
-)
-
-daily_second = (
-    candidate_daily_rank[
-        candidate_daily_rank["rank"] == 2
-    ]
-    [
-        [
-            "date",
-            "election_country",
-            "election_group",
-            "candidate",
-            "probability"
-        ]
-    ]
-    .rename(
-        columns={
-            "candidate": "second_place",
-            "probability": "second_probability"
-        }
-    )
-    .copy()
-)
-
-daily_leader_gap = daily_leaders.merge(
-    daily_second,
-    on=[
-        "date",
-        "election_country",
-        "election_group"
-    ],
-    how="left"
-)
-
-daily_leader_gap["leader_gap_pp"] = (
-    daily_leader_gap["leader_probability"]
-    - daily_leader_gap["second_probability"]
-)
-
-
-
-candidate_history_df = candidate_history_df.sort_values(
-    ["election_country", "election_group", "candidate", "date"]
-).copy()
-
-candidate_history_df["daily_change_pp"] = (
-    candidate_history_df
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )["probability"]
-    .diff()
-)
-
-
-daily_volatility = (
-    candidate_history_df
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )["daily_change_pp"]
-    .std()
-    .reset_index(
-        name="daily_change_std_pp"
-    )
-)
-
-
-daily_movement = (
-    candidate_history_df
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )["daily_change_pp"]
-    .apply(
-        lambda x: x.dropna().abs().mean()
-    )
-    .reset_index(
-        name="avg_daily_movement_pp"
-    )
-)
-
-
-candidate_momentum = (
-    candidate_history_df
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )
-    .agg(
-        mean_probability=("probability", "mean"),
-        first_probability=("probability", "first"),
-        last_probability=("probability", "last"),
-        min_probability=("probability", "min"),
-        max_probability=("probability", "max"),
-        avg_daily_movement_pp=(
-            "daily_change_pp",
-            lambda x: x.dropna().abs().mean()
-        ),
-        daily_volatility_pp=(
-            "daily_change_pp",
-            "std"
-        )
-    )
-    .reset_index()
-)
-
-candidate_momentum["net_change_pp"] = (
-    candidate_momentum["last_probability"]
-    - candidate_momentum["first_probability"]
-)
-
-
-
-
-latest_rank = (
-    candidate_daily_rank
-    .sort_values("date")
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )
-    .tail(1)
-    [
-        [
-            "election_country",
-            "election_group",
-            "candidate",
-            "rank"
-        ]
-    ]
-    .rename(
-        columns={"rank": "current_rank"}
-    )
-)
-
-
-candidate_momentum = candidate_momentum.merge(
-    latest_rank,
-    on=[
-        "election_country",
-        "election_group",
-        "candidate"
-    ],
-    how="left"
-)
-
-daily_leader = (
-    candidate_daily_rank
-    .sort_values(
-        [
-            "election_country",
-            "election_group",
-            "date",
-            "rank"
-        ]
-    )
-    .drop_duplicates(
-        subset=[
-            "election_country",
-            "election_group",
-            "date"
-        ],
-        keep="first"
-    )
-    .copy()
-)
-
-
-daily_leader["previous_leader"] = (
-    daily_leader
-    .groupby(
-        [
-            "election_country",
-            "election_group"
-        ]
-    )["candidate"]
-    .shift(1)
-)
-
-
-daily_leader["leader_changed"] = (
-    daily_leader["candidate"]
-    != daily_leader["previous_leader"]
-)
-
-daily_leader.loc[
-    daily_leader["previous_leader"].isna(),
-    "leader_changed"
-] = False
-
-daily_leader.loc[
-    daily_leader["previous_leader"].isna(),
-    "leader_changed"
-] = False
-
-
-
-candidate_daily_rank = candidate_daily_rank.sort_values(
-    [
-        "election_country",
-        "election_group",
-        "candidate",
-        "date"
-    ]
-).copy()
-
-candidate_daily_rank["previous_rank"] = (
-    candidate_daily_rank
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )["rank"]
-    .shift(1)
-)
-
-
-candidate_daily_rank["rank_change"] = (
-    candidate_daily_rank["previous_rank"]
-    - candidate_daily_rank["rank"]
-)
-
-
-rank_movement_summary = (
-    candidate_daily_rank
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "candidate"
-        ]
-    )
-    .agg(
-        current_rank=("rank", "last"),
-        best_rank=("rank", "min"),
-        worst_rank=("rank", "max"),
-        rank_changes=(
-            "rank_change",
-            lambda x: (x.dropna() != 0).sum()
-        ),
-        rank_gain_events=(
-            "rank_change",
-            lambda x: (x.dropna() > 0).sum()
-        ),
-        rank_loss_events=(
-            "rank_change",
-            lambda x: (x.dropna() < 0).sum()
-        )
-    )
-    .reset_index()
-)
-
-
-election_daily_summary = daily_leader_gap.merge(
-    daily_leader[
-        [
-            "election_country",
-            "election_group",
-            "date",
-            "leader_changed"
-        ]
-    ],
-    on=[
-        "election_country",
-        "election_group",
-        "date"
-    ],
-    how="left"
-)
-
-
-election_summary = (
-    election_daily_summary
-    .groupby(
-        [
-            "election_country",
-            "election_group"
-        ]
-    )
-    .agg(
-        first_leader=("leader", "first"),
-        last_leader=("leader", "last"),
-
-        mean_leader_probability=(
-            "leader_probability",
-            "mean"
-        ),
-
-        first_leader_probability=(
-            "leader_probability",
-            "first"
-        ),
-
-        last_leader_probability=(
-            "leader_probability",
-            "last"
-        ),
-
-        mean_leader_gap_pp=(
-            "leader_gap_pp",
-            "mean"
-        ),
-
-        min_leader_gap_pp=(
-            "leader_gap_pp",
-            "min"
-        ),
-
-        max_leader_gap_pp=(
-            "leader_gap_pp",
-            "max"
-        ),
-
-        leader_changes=(
-            "leader_changed",
-            "sum"
-        )
-    )
-    .reset_index()
-)
-
-election_summary["leader_probability_change_pp"] = (
-    election_summary["last_leader_probability"]
-    - election_summary["first_leader_probability"]
-)
-
-candidate_daily_rank["total_probability"] = (
-    candidate_daily_rank
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "date"
-        ]
-    )["probability"]
-    .transform("sum")
-)
-
-
-candidate_daily_rank["probability_share"] = (
-    candidate_daily_rank["probability"]
-    / candidate_daily_rank["total_probability"]
-)
-
-
-daily_concentration = (
-    candidate_daily_rank
-    .sort_values(
-        [
-            "election_country",
-            "election_group",
-            "date",
-            "rank"
-        ]
-    )
-    .groupby(
-        [
-            "election_country",
-            "election_group",
-            "date"
-        ]
-    )
-    .agg(
-        top_1_probability=("probability", "first"),
-        top_2_probability=(
-            "probability",
-            lambda x: x.iloc[:2].sum()
-        ),
-        top_3_probability=(
-            "probability",
-            lambda x: x.iloc[:3].sum()
-        ),
-        total_probability=("probability", "sum")
-    )
-    .reset_index()
-)
-
-daily_concentration["top_1_share"] = (
-    daily_concentration["top_1_probability"]
-    / daily_concentration["total_probability"]
-)
-
-daily_concentration["top_2_share"] = (
-    daily_concentration["top_2_probability"]
-    / daily_concentration["total_probability"]
-)
-
-daily_concentration["top_3_share"] = (
-    daily_concentration["top_3_probability"]
-    / daily_concentration["total_probability"]
-)
-
-
-daily_concentration[
-    [
-        "top_1_share",
-        "top_2_share",
-        "top_3_share"
-    ]
-] *= 100
-
-
-full_candidate_test = all_history_df[
-    (all_history_df["market_type"] == "candidate") &
-    (all_history_df["election_country"] == "United States")
-].copy()
-
-
-
-
-
-
-
-
-# ------------------------------------------------
-# Democratic presidential candidates
-# ------------------------------------------------
-
-# Current market metadata
-dem_candidates = election_df[
-    (election_df["market_type"] == "candidate") &
-    (
-        election_df["market_name"].str.contains(
-            "2028 Democratic presidential nomination",
-            case=False,
-            na=False
-        )
-    )
-].copy()
-
-
-dem_history = get_all_election_history(
-    dem_candidates,
-    days=7
-)
-
-dem_history = dem_history.sort_values(
-    ["date", "probability"],
-    ascending=[True, False]
-).copy()
-
-dem_history["rank"] = (
-    dem_history
-    .groupby("date")["probability"]
-    .rank(
-        method="min",
-        ascending=False
-    )
-)
-
-
-
-
-
-date_counts = (
-    dem_history
-    .groupby("date")["candidate"]
-    .nunique()
-)
-
-
-
-
-top_10_history = (
-    dem_history[
-        dem_history["rank"] <= 10
-    ]
-    .sort_values(
-        ["date", "rank"]
-    )
-)
-
-
-
-dem_analysis = (
-    dem_history[
-        [
-            "date",
-            "candidate",
-            "probability",
-            "rank"
-        ]
-    ]
-    .sort_values(
-        ["date", "rank", "candidate"]
-    )
-    .reset_index(drop=True)
-)
-
-
-
-candidate_summary = (
-    dem_analysis
-    .groupby("candidate")
-    .agg(
-        initial_probability=("probability", "first"),
-        final_probability=("probability", "last"),
-        mean_probability=("probability", "mean"),
-        max_probability=("probability", "max"),
-        min_probability=("probability", "min"),
-        initial_rank=("rank", "first"),
-        final_rank=("rank", "last"),
-        best_rank=("rank", "min"),
-        worst_rank=("rank", "max")
-    )
-    .reset_index()
-)
-
-candidate_summary["probability_change"] = (
-    candidate_summary["final_probability"]
-    - candidate_summary["initial_probability"]
-)
-
-candidate_summary["rank_change"] = (
-    candidate_summary["initial_rank"]
-    - candidate_summary["final_rank"]
-)
-
-
-
-daily_probability_sum = (
-    dem_analysis
-    .groupby("date")["probability"]
-    .sum()
-    .reset_index(name="total_probability")
-)
-
-
-
-
-
-daily_market_summary = (
-    dem_analysis
-    .groupby("date")
-    .agg(
-        total_probability=("probability", "sum"),
-        top_probability=("probability", "max"),
-        mean_probability=("probability", "mean"),
-        median_probability=("probability", "median"),
-        n_candidates=("candidate", "nunique")
-    )
-    .reset_index()
-)
-
-daily_market_summary["unaccounted_probability"] = (
-    100 - daily_market_summary["total_probability"]
-)
-
-daily_market_summary
-
-daily_concentration = (
-    dem_analysis
-    .groupby("date")
-    .agg(
-        top_1=("probability", "nlargest")
-    )
-)
-
-top_n_summary = (
-    dem_analysis
-    .sort_values(
-        ["date", "probability"],
-        ascending=[True, False]
-    )
-    .groupby("date")
-    .agg(
-        top_1=("probability", lambda x: x.iloc[:1].sum()),
-        top_3=("probability", lambda x: x.iloc[:3].sum()),
-        top_5=("probability", lambda x: x.iloc[:5].sum()),
-        top_10=("probability", lambda x: x.iloc[:10].sum())
-    )
-    .reset_index()
-)
-
-top_n_summary
-
-
-
-
-candidate_daily_rank = (
-    dem_history
-    .sort_values(
-        [
-            "election_country",
-            "event",
-            "date",
-            "probability"
-        ],
-        ascending=[
-            True,
-            True,
-            True,
-            False
-        ]
-    )
-    .copy()
-)
-
-candidate_daily_rank["rank"] = (
-    candidate_daily_rank
-    .groupby(
-        [
-            "election_country",
-            "event",
-            "date"
-        ]
-    )["probability"]
-    .rank(
-        method="min",
-        ascending=False
-    )
-)
-
-
-
-dem_candidates[
-    [
-        "candidate",
-        "market_id",
-        "condition_id",
-        "negRisk",
-        "negRiskMarketID",
-        "active",
-        "closed",
-        "accepting_orders"
-    ]
-].sort_values("negRiskMarketID")
-
-
-candidate_counts = (
-    election_df
-    .groupby("negRiskMarketID")
-    .agg(
-        n_candidates=("candidate", "nunique"),
-        n_markets=("market_id", "nunique")
-    )
-    .reset_index()
-)
-
-candidate_counts.sort_values(
-    "n_candidates",
-    ascending=False
-).head(20)
-
-
-
-
-# Load election history
-history_df = pd.read_csv(
-   "election_market_history.csv",
-    parse_dates=["date"]
-)
-
-
-
-history_df["election_type"] = history_df.apply(
-    lambda row: classify_election(
-        row["market_name"],
-        row["event"]
-    ),
-    axis=1
-)
-
-history_df["election_subtype"] = history_df.apply(
-    lambda row: classify_election_subtype(
-        row["market_name"],
-        row["event"]
-    ),
-    axis=1
-)
-
-history_df["market_category"] = history_df.apply(
-    lambda row: classify_market_category(
-        row["market_name"],
-        row.get("event", "")
-    ),
-    axis=1
-)
-
-history_df.loc[
-    history_df["market_category"] == "Geopolitical",
-    "election_type"
-] = "Geopolitical"
-
-history_df.loc[
-    history_df["market_category"] == "Geopolitical",
-    "election_subtype"
-] = "Geopolitical"
-
-
-import os
-
-os.makedirs("data", exist_ok=True)
-
-history_df.to_csv(
-    "data/history_df.csv",
-    index=False
-)
-
-print("Saved:", len(history_df), "rows")
-print("Columns:", history_df.columns.tolist())
-
-import os
-
-print(os.path.exists("data/history_df.csv"))
-print(os.path.getsize("data/history_df.csv"))
-
-nomination_markets = history_df[
-    history_df["market_name"].str.contains(
-        "nomination|nominee",
-        case=False,
-        na=False
-    )
-]
-
-
-democratic_history = filter_markets(
-    history_df,
-    election_type="US Presidential",
-    election_subtype="Democratic Nomination"
-)
-
-democratic_ranking = get_candidate_ranking(
-    democratic_history
-)
-
-print(democratic_ranking.head(10))
-
-print(len(democratic_history))
-
-##democratic_trends = get_candidate_trends(
-    ##democratic_history
-##)
-
-##print(democratic_trends.head(10))
-
-##print("\n--- Filter Tests ---")
-
-# ------------------------------------------------------------
-# Test 1: Election type + subtype
-# ------------------------------------------------------------
-
-democratic_nomination = filter_markets(
-    history_df,
-    market_category="US Elections",
-    election_type="US Presidential",
-    election_subtype="Democratic Nomination"
-)
-
-general_election = filter_markets(
-    history_df,
-    market_category="US Elections",
-    election_type="US Presidential",
-    election_subtype="General Election"
-)
-
-geopolitical = filter_markets(
-    history_df,
-    market_category="Geopolitical"
-)
-
-
-
-
-
-
-
-# ------------------------------------------------
-# Clean existing history file
-# ------------------------------------------------
-
-##history_df = load_election_history(
-    ##"election_market_history.csv"
-##)
-
-##history_df = history_df.drop_duplicates(
-   ## subset=["date", "market_id"],
-    ##keep="last"
-##)
-
-##save_election_history(
-    ##history_df,
-    ##"election_market_history.csv"
-##)
-
-
-
-# Calculate probability changes
-probability_df = calculate_probability_changes(
-    history_df
-)
-# ------------------------------------------------
-# Calculate probability change
-# ------------------------------------------------
-
-probability_df["previous_probability"] = (
-    probability_df
-    .groupby("market_id")["probability"]
-    .shift(1)
-)
-
-probability_df["probability_change"] = (
-    probability_df["probability"]
-    - probability_df["previous_probability"]
-).round(2)
-
-
-
-# Get biggest movers
-movers = get_biggest_movers(
-    probability_df,
-    n=5
-)
-
-
-
-
-
-
-
-
-
-
-
-
-
-market_trends = calculate_market_trends(history_df)
-
-
-##democratic_test_trends = democratic_trends.copy()
-
-##democratic_test_trends.loc[
-   ## democratic_test_trends["candidate"] == "Gavin Newsom",
-   ## "latest_probability"
-##] += 2
-
-##democratic_test_trends.loc[
-    ##democratic_test_trends["candidate"] == "Alexandria Ocasio-Cortez",
-    ##"latest_probability"
-##] -= 2
-
-##democratic_test_trends.loc[
-   ## democratic_test_trends["candidate"] == "Pete Buttigieg",
-    ##"latest_probability"
-##] += 1
-
-##democratic_test_trends["probability_change"] = (
-   ## democratic_test_trends["latest_probability"]
-   ## - democratic_test_trends["start_probability"]
-##)
-
-##democratic_test_trends["trend"] = np.select(
-    ##[
-       ## democratic_test_trends["probability_change"] > 0,
-        ##democratic_test_trends["probability_change"] < 0
-    ##],
-    ##[
-       ## "Up",
-       ## "Down"
-    ##],
-    ##default="Unchanged"
-##)
-
-def get_homepage_market_summary(df):
-    """
-    Return the leading USA election, global election,
-    and geopolitical market for the Home page.
-    """
-
-    if df is None or df.empty:
-        return {
-            "usa": None,
-            "global": None,
-            "geopolitical": None
-        }
-
-    data = df.copy()
-
-    data["probability"] = pd.to_numeric(
-        data["probability"],
-        errors="coerce"
-    )
-
-    data["volume"] = pd.to_numeric(
-        data["volume"],
-        errors="coerce"
-    )
-
-    data["date"] = pd.to_datetime(
-        data["date"],
-        errors="coerce"
-    )
-
-    data = data.dropna(
-        subset=["date", "probability"]
-    )
-
-    if data.empty:
-        return {
-            "usa": None,
-            "global": None,
-            "geopolitical": None
-        }
-
-    latest_date = data["date"].max()
-
-    def build_market(category_df):
-
-        if category_df.empty:
-            return None
-
-        latest = category_df[
-            category_df["date"] == category_df["date"].max()
-        ].copy()
-
-        if latest.empty:
-            return None
-
-        # Highest probability market = leader
-        row = latest.sort_values(
-            "probability",
-            ascending=False
-        ).iloc[0]
-
-        market_name = row["market_name"]
-
-        leader = row.get("candidate", None)
-
-        if pd.isna(leader) or str(leader).strip() == "":
-            leader = market_name
-
-        volume = row.get("volume", 0)
-
-        if pd.isna(volume):
-            volume = 0
-
-        # ----------------------------------------------------
-        # Find the closest observation to one week ago
-        # ----------------------------------------------------
-
-        market_history = category_df[
-            category_df["market_name"] == market_name
-        ].copy()
-
-        target_date = latest_date - pd.Timedelta(days=7)
-
-        market_history["date_distance"] = (
-            market_history["date"] - target_date
-        ).abs()
-
-        last_week_row = market_history.sort_values(
-            "date_distance"
-        ).iloc[0]
-
-        last_week_probability = last_week_row[
-            "probability"
-        ]
-
-        trend_change = (
-            row["probability"]
-            - last_week_probability
-        )
-
-        return {
-            "market_name": market_name,
-            "leader": leader,
-            "probability": row["probability"],
-            "volume": volume,
-            "trend_change": trend_change,
-            "last_week_probability": last_week_probability
-        }
-
-    # ========================================================
-    # USA ELECTION
-    # ========================================================
-
-    usa_df = data[
-        data["election_country"]
-        .astype(str)
-        .str.upper()
-        .isin([
-            "USA",
-            "US",
-            "UNITED STATES"
-        ])
     ].copy()
 
-    usa_summary = build_market(usa_df)
 
-    # ========================================================
-    # GLOBAL ELECTION
-    # ========================================================
 
-    global_df = data[
+
+    global_df = election_df[
+        election_df["election_type"] == "Global Elections"
+    ].copy()
+
+
+
+    elections = election_df[
+        election_df["election_type"] != "Other"
+    ].copy()
+
+
+
+
+    global_elections = election_df[
+        election_df["election_type"] == "Global Elections"
+    ].copy()
+
+    dem_election_df = election_df[
         (
-            data["market_category"]
-            .astype(str)
-            .str.lower()
-            .str.contains("election", na=False)
+            election_df["market_type"] == "candidate"
         )
         &
-        ~(
+        (
+            election_df["market_name"].str.contains(
+                "2028 Democratic presidential nomination",
+                case=False,
+                na=False
+            )
+        )
+    ].copy()
+
+    all_history_df = get_all_election_history(
+        dem_election_df,
+        days=7
+    )
+    all_history_df["election_group"] = all_history_df["market_name"].apply(
+        lambda x: "2028 Democratic presidential nomination"
+        if "2028 Democratic presidential nomination" in str(x)
+        else None
+    )
+
+
+    event_daily_check = (
+        all_history_df
+        .groupby(["negRiskMarketID", "date"])
+        .agg(
+            n_candidates=("candidate", "nunique"),
+            total_probability=("probability", "sum"),
+            min_probability=("probability", "min"),
+            max_probability=("probability", "max"),
+            missing_probability=("probability", lambda x: x.isna().sum())
+        )
+        .reset_index()
+    )
+
+    event_daily_check["difference_from_100"] = (
+        event_daily_check["total_probability"] - 100
+    )
+
+    event_daily_check["abs_difference"] = (
+        event_daily_check["difference_from_100"].abs()
+    )
+
+
+    aggregate_history_df = all_history_df[
+        all_history_df["market_type"] == "aggregate"
+    ].copy()
+
+
+    candidate_history_df = all_history_df[
+        all_history_df["market_type"] == "candidate"
+    ].copy()
+
+    ##final_df = all_history_df.merge(
+    ##election_df[
+            ##[
+            ## "market_id",
+                ##"election_country",
+                ##"volume",
+                ##"liquidity"
+            ##]
+        ##],
+        ##on="market_id",
+        ##how="left"
+    ##)
+
+
+    candidate_history_df["election_group"] = (
+        candidate_history_df["event"]
+        .str.replace(
+            r"Will .*? win the ",
+            "",
+            regex=True
+        )
+        .str.replace(
+            "?",
+            "",
+            regex=False
+        )
+        .str.strip()
+    )
+
+
+    candidate_summary = (
+        candidate_history_df
+        .sort_values("date")
+        .groupby(
+            [
+                "election_country",
+                "event",
+                "candidate"
+            ]
+        )["probability"]
+        .agg(
+            mean_probability="mean",
+            min_probability="min",
+            max_probability="max",
+            first_probability="first",
+            last_probability="last"
+        )
+        .reset_index()
+    )
+
+
+    candidate_summary["change_pp"] = (
+        candidate_summary["last_probability"]
+        - candidate_summary["first_probability"]
+    )
+
+
+    candidate_summary = candidate_summary.sort_values(
+        "last_probability",
+        ascending=False
+    )
+
+
+    candidate_daily_rank = (
+        candidate_history_df
+        .copy()
+        .sort_values(
+            [
+                "election_country",
+                "election_group",
+                "date",
+                "probability"
+            ],
+            ascending=[True, True, True, False]
+        )
+    )
+
+    candidate_daily_rank["rank"] = (
+        candidate_daily_rank
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "date"
+            ]
+        )["probability"]
+        .rank(
+            method="min",
+            ascending=False
+        )
+        .astype(int)
+    )
+
+    daily_leaders = (
+        candidate_daily_rank[
+            candidate_daily_rank["rank"] == 1
+        ]
+        [
+            [
+                "date",
+                "election_country",
+                "election_group",
+                "candidate",
+                "probability"
+            ]
+        ]
+        .rename(
+            columns={
+                "candidate": "leader",
+                "probability": "leader_probability"
+            }
+        )
+        .copy()
+    )
+
+    daily_second = (
+        candidate_daily_rank[
+            candidate_daily_rank["rank"] == 2
+        ]
+        [
+            [
+                "date",
+                "election_country",
+                "election_group",
+                "candidate",
+                "probability"
+            ]
+        ]
+        .rename(
+            columns={
+                "candidate": "second_place",
+                "probability": "second_probability"
+            }
+        )
+        .copy()
+    )
+
+    daily_leader_gap = daily_leaders.merge(
+        daily_second,
+        on=[
+            "date",
+            "election_country",
+            "election_group"
+        ],
+        how="left"
+    )
+
+    daily_leader_gap["leader_gap_pp"] = (
+        daily_leader_gap["leader_probability"]
+        - daily_leader_gap["second_probability"]
+    )
+
+
+
+    candidate_history_df = candidate_history_df.sort_values(
+        ["election_country", "election_group", "candidate", "date"]
+    ).copy()
+
+    candidate_history_df["daily_change_pp"] = (
+        candidate_history_df
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )["probability"]
+        .diff()
+    )
+
+
+    daily_volatility = (
+        candidate_history_df
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )["daily_change_pp"]
+        .std()
+        .reset_index(
+            name="daily_change_std_pp"
+        )
+    )
+
+
+    daily_movement = (
+        candidate_history_df
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )["daily_change_pp"]
+        .apply(
+            lambda x: x.dropna().abs().mean()
+        )
+        .reset_index(
+            name="avg_daily_movement_pp"
+        )
+    )
+
+
+    candidate_momentum = (
+        candidate_history_df
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )
+        .agg(
+            mean_probability=("probability", "mean"),
+            first_probability=("probability", "first"),
+            last_probability=("probability", "last"),
+            min_probability=("probability", "min"),
+            max_probability=("probability", "max"),
+            avg_daily_movement_pp=(
+                "daily_change_pp",
+                lambda x: x.dropna().abs().mean()
+            ),
+            daily_volatility_pp=(
+                "daily_change_pp",
+                "std"
+            )
+        )
+        .reset_index()
+    )
+
+    candidate_momentum["net_change_pp"] = (
+        candidate_momentum["last_probability"]
+        - candidate_momentum["first_probability"]
+    )
+
+
+
+
+    latest_rank = (
+        candidate_daily_rank
+        .sort_values("date")
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )
+        .tail(1)
+        [
+            [
+                "election_country",
+                "election_group",
+                "candidate",
+                "rank"
+            ]
+        ]
+        .rename(
+            columns={"rank": "current_rank"}
+        )
+    )
+
+
+    candidate_momentum = candidate_momentum.merge(
+        latest_rank,
+        on=[
+            "election_country",
+            "election_group",
+            "candidate"
+        ],
+        how="left"
+    )
+
+    daily_leader = (
+        candidate_daily_rank
+        .sort_values(
+            [
+                "election_country",
+                "election_group",
+                "date",
+                "rank"
+            ]
+        )
+        .drop_duplicates(
+            subset=[
+                "election_country",
+                "election_group",
+                "date"
+            ],
+            keep="first"
+        )
+        .copy()
+    )
+
+
+    daily_leader["previous_leader"] = (
+        daily_leader
+        .groupby(
+            [
+                "election_country",
+                "election_group"
+            ]
+        )["candidate"]
+        .shift(1)
+    )
+
+
+    daily_leader["leader_changed"] = (
+        daily_leader["candidate"]
+        != daily_leader["previous_leader"]
+    )
+
+    daily_leader.loc[
+        daily_leader["previous_leader"].isna(),
+        "leader_changed"
+    ] = False
+
+    daily_leader.loc[
+        daily_leader["previous_leader"].isna(),
+        "leader_changed"
+    ] = False
+
+
+
+    candidate_daily_rank = candidate_daily_rank.sort_values(
+        [
+            "election_country",
+            "election_group",
+            "candidate",
+            "date"
+        ]
+    ).copy()
+
+    candidate_daily_rank["previous_rank"] = (
+        candidate_daily_rank
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )["rank"]
+        .shift(1)
+    )
+
+
+    candidate_daily_rank["rank_change"] = (
+        candidate_daily_rank["previous_rank"]
+        - candidate_daily_rank["rank"]
+    )
+
+
+    rank_movement_summary = (
+        candidate_daily_rank
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "candidate"
+            ]
+        )
+        .agg(
+            current_rank=("rank", "last"),
+            best_rank=("rank", "min"),
+            worst_rank=("rank", "max"),
+            rank_changes=(
+                "rank_change",
+                lambda x: (x.dropna() != 0).sum()
+            ),
+            rank_gain_events=(
+                "rank_change",
+                lambda x: (x.dropna() > 0).sum()
+            ),
+            rank_loss_events=(
+                "rank_change",
+                lambda x: (x.dropna() < 0).sum()
+            )
+        )
+        .reset_index()
+    )
+
+
+    election_daily_summary = daily_leader_gap.merge(
+        daily_leader[
+            [
+                "election_country",
+                "election_group",
+                "date",
+                "leader_changed"
+            ]
+        ],
+        on=[
+            "election_country",
+            "election_group",
+            "date"
+        ],
+        how="left"
+    )
+
+
+    election_summary = (
+        election_daily_summary
+        .groupby(
+            [
+                "election_country",
+                "election_group"
+            ]
+        )
+        .agg(
+            first_leader=("leader", "first"),
+            last_leader=("leader", "last"),
+
+            mean_leader_probability=(
+                "leader_probability",
+                "mean"
+            ),
+
+            first_leader_probability=(
+                "leader_probability",
+                "first"
+            ),
+
+            last_leader_probability=(
+                "leader_probability",
+                "last"
+            ),
+
+            mean_leader_gap_pp=(
+                "leader_gap_pp",
+                "mean"
+            ),
+
+            min_leader_gap_pp=(
+                "leader_gap_pp",
+                "min"
+            ),
+
+            max_leader_gap_pp=(
+                "leader_gap_pp",
+                "max"
+            ),
+
+            leader_changes=(
+                "leader_changed",
+                "sum"
+            )
+        )
+        .reset_index()
+    )
+
+    election_summary["leader_probability_change_pp"] = (
+        election_summary["last_leader_probability"]
+        - election_summary["first_leader_probability"]
+    )
+
+    candidate_daily_rank["total_probability"] = (
+        candidate_daily_rank
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "date"
+            ]
+        )["probability"]
+        .transform("sum")
+    )
+
+
+    candidate_daily_rank["probability_share"] = (
+        candidate_daily_rank["probability"]
+        / candidate_daily_rank["total_probability"]
+    )
+
+
+    daily_concentration = (
+        candidate_daily_rank
+        .sort_values(
+            [
+                "election_country",
+                "election_group",
+                "date",
+                "rank"
+            ]
+        )
+        .groupby(
+            [
+                "election_country",
+                "election_group",
+                "date"
+            ]
+        )
+        .agg(
+            top_1_probability=("probability", "first"),
+            top_2_probability=(
+                "probability",
+                lambda x: x.iloc[:2].sum()
+            ),
+            top_3_probability=(
+                "probability",
+                lambda x: x.iloc[:3].sum()
+            ),
+            total_probability=("probability", "sum")
+        )
+        .reset_index()
+    )
+
+    daily_concentration["top_1_share"] = (
+        daily_concentration["top_1_probability"]
+        / daily_concentration["total_probability"]
+    )
+
+    daily_concentration["top_2_share"] = (
+        daily_concentration["top_2_probability"]
+        / daily_concentration["total_probability"]
+    )
+
+    daily_concentration["top_3_share"] = (
+        daily_concentration["top_3_probability"]
+        / daily_concentration["total_probability"]
+    )
+
+
+    daily_concentration[
+        [
+            "top_1_share",
+            "top_2_share",
+            "top_3_share"
+        ]
+    ] *= 100
+
+
+    full_candidate_test = all_history_df[
+        (all_history_df["market_type"] == "candidate") &
+        (all_history_df["election_country"] == "United States")
+    ].copy()
+
+
+
+
+
+
+
+
+    # ------------------------------------------------
+    # Democratic presidential candidates
+    # ------------------------------------------------
+
+    # Current market metadata
+    dem_candidates = election_df[
+        (election_df["market_type"] == "candidate") &
+        (
+            election_df["market_name"].str.contains(
+                "2028 Democratic presidential nomination",
+                case=False,
+                na=False
+            )
+        )
+    ].copy()
+
+
+    dem_history = get_all_election_history(
+        dem_candidates,
+        days=7
+    )
+
+    dem_history = dem_history.sort_values(
+        ["date", "probability"],
+        ascending=[True, False]
+    ).copy()
+
+    dem_history["rank"] = (
+        dem_history
+        .groupby("date")["probability"]
+        .rank(
+            method="min",
+            ascending=False
+        )
+    )
+
+
+
+
+
+    date_counts = (
+        dem_history
+        .groupby("date")["candidate"]
+        .nunique()
+    )
+
+
+
+
+    top_10_history = (
+        dem_history[
+            dem_history["rank"] <= 10
+        ]
+        .sort_values(
+            ["date", "rank"]
+        )
+    )
+
+
+
+    dem_analysis = (
+        dem_history[
+            [
+                "date",
+                "candidate",
+                "probability",
+                "rank"
+            ]
+        ]
+        .sort_values(
+            ["date", "rank", "candidate"]
+        )
+        .reset_index(drop=True)
+    )
+
+
+
+    candidate_summary = (
+        dem_analysis
+        .groupby("candidate")
+        .agg(
+            initial_probability=("probability", "first"),
+            final_probability=("probability", "last"),
+            mean_probability=("probability", "mean"),
+            max_probability=("probability", "max"),
+            min_probability=("probability", "min"),
+            initial_rank=("rank", "first"),
+            final_rank=("rank", "last"),
+            best_rank=("rank", "min"),
+            worst_rank=("rank", "max")
+        )
+        .reset_index()
+    )
+
+    candidate_summary["probability_change"] = (
+        candidate_summary["final_probability"]
+        - candidate_summary["initial_probability"]
+    )
+
+    candidate_summary["rank_change"] = (
+        candidate_summary["initial_rank"]
+        - candidate_summary["final_rank"]
+    )
+
+
+
+    daily_probability_sum = (
+        dem_analysis
+        .groupby("date")["probability"]
+        .sum()
+        .reset_index(name="total_probability")
+    )
+
+
+
+
+
+    daily_market_summary = (
+        dem_analysis
+        .groupby("date")
+        .agg(
+            total_probability=("probability", "sum"),
+            top_probability=("probability", "max"),
+            mean_probability=("probability", "mean"),
+            median_probability=("probability", "median"),
+            n_candidates=("candidate", "nunique")
+        )
+        .reset_index()
+    )
+
+    daily_market_summary["unaccounted_probability"] = (
+        100 - daily_market_summary["total_probability"]
+    )
+
+    daily_market_summary
+
+    daily_concentration = (
+        dem_analysis
+        .groupby("date")
+        .agg(
+            top_1=("probability", "nlargest")
+        )
+    )
+
+    top_n_summary = (
+        dem_analysis
+        .sort_values(
+            ["date", "probability"],
+            ascending=[True, False]
+        )
+        .groupby("date")
+        .agg(
+            top_1=("probability", lambda x: x.iloc[:1].sum()),
+            top_3=("probability", lambda x: x.iloc[:3].sum()),
+            top_5=("probability", lambda x: x.iloc[:5].sum()),
+            top_10=("probability", lambda x: x.iloc[:10].sum())
+        )
+        .reset_index()
+    )
+
+    top_n_summary
+
+
+
+
+    candidate_daily_rank = (
+        dem_history
+        .sort_values(
+            [
+                "election_country",
+                "event",
+                "date",
+                "probability"
+            ],
+            ascending=[
+                True,
+                True,
+                True,
+                False
+            ]
+        )
+        .copy()
+    )
+
+    candidate_daily_rank["rank"] = (
+        candidate_daily_rank
+        .groupby(
+            [
+                "election_country",
+                "event",
+                "date"
+            ]
+        )["probability"]
+        .rank(
+            method="min",
+            ascending=False
+        )
+    )
+
+
+
+    dem_candidates[
+        [
+            "candidate",
+            "market_id",
+            "condition_id",
+            "negRisk",
+            "negRiskMarketID",
+            "active",
+            "closed",
+            "accepting_orders"
+        ]
+    ].sort_values("negRiskMarketID")
+
+
+    candidate_counts = (
+        election_df
+        .groupby("negRiskMarketID")
+        .agg(
+            n_candidates=("candidate", "nunique"),
+            n_markets=("market_id", "nunique")
+        )
+        .reset_index()
+    )
+
+    candidate_counts.sort_values(
+        "n_candidates",
+        ascending=False
+    ).head(20)
+
+
+
+
+    # Load election history
+    history_df = pd.read_csv(
+    "election_market_history.csv",
+        parse_dates=["date"]
+    )
+
+
+
+    history_df["election_type"] = history_df.apply(
+        lambda row: classify_election(
+            row["market_name"],
+            row["event"]
+        ),
+        axis=1
+    )
+
+    history_df["election_subtype"] = history_df.apply(
+        lambda row: classify_election_subtype(
+            row["market_name"],
+            row["event"]
+        ),
+        axis=1
+    )
+
+    history_df["market_category"] = history_df.apply(
+        lambda row: classify_market_category(
+            row["market_name"],
+            row.get("event", "")
+        ),
+        axis=1
+    )
+
+    history_df.loc[
+        history_df["market_category"] == "Geopolitical",
+        "election_type"
+    ] = "Geopolitical"
+
+    history_df.loc[
+        history_df["market_category"] == "Geopolitical",
+        "election_subtype"
+    ] = "Geopolitical"
+
+
+    import os
+
+    os.makedirs("data", exist_ok=True)
+
+    history_df.to_csv(
+        "data/history_df.csv",
+        index=False
+    )
+
+    print("Saved:", len(history_df), "rows")
+    print("Columns:", history_df.columns.tolist())
+
+    import os
+
+    print(os.path.exists("data/history_df.csv"))
+    print(os.path.getsize("data/history_df.csv"))
+
+    nomination_markets = history_df[
+        history_df["market_name"].str.contains(
+            "nomination|nominee",
+            case=False,
+            na=False
+        )
+    ]
+
+
+    democratic_history = filter_markets(
+        history_df,
+        election_type="US Presidential",
+        election_subtype="Democratic Nomination"
+    )
+
+    democratic_ranking = get_candidate_ranking(
+        democratic_history
+    )
+
+    print(democratic_ranking.head(10))
+
+    print(len(democratic_history))
+
+    ##democratic_trends = get_candidate_trends(
+        ##democratic_history
+    ##)
+
+    ##print(democratic_trends.head(10))
+
+    ##print("\n--- Filter Tests ---")
+
+    # ------------------------------------------------------------
+    # Test 1: Election type + subtype
+    # ------------------------------------------------------------
+
+    democratic_nomination = filter_markets(
+        history_df,
+        market_category="US Elections",
+        election_type="US Presidential",
+        election_subtype="Democratic Nomination"
+    )
+
+    general_election = filter_markets(
+        history_df,
+        market_category="US Elections",
+        election_type="US Presidential",
+        election_subtype="General Election"
+    )
+
+    geopolitical = filter_markets(
+        history_df,
+        market_category="Geopolitical"
+    )
+
+
+
+
+
+
+
+    # ------------------------------------------------
+    # Clean existing history file
+    # ------------------------------------------------
+
+    ##history_df = load_election_history(
+        ##"election_market_history.csv"
+    ##)
+
+    ##history_df = history_df.drop_duplicates(
+    ## subset=["date", "market_id"],
+        ##keep="last"
+    ##)
+
+    ##save_election_history(
+        ##history_df,
+        ##"election_market_history.csv"
+    ##)
+
+
+
+    # Calculate probability changes
+    probability_df = calculate_probability_changes(
+        history_df
+    )
+    # ------------------------------------------------
+    # Calculate probability change
+    # ------------------------------------------------
+
+    probability_df["previous_probability"] = (
+        probability_df
+        .groupby("market_id")["probability"]
+        .shift(1)
+    )
+
+    probability_df["probability_change"] = (
+        probability_df["probability"]
+        - probability_df["previous_probability"]
+    ).round(2)
+
+
+
+    # Get biggest movers
+    movers = get_biggest_movers(
+        probability_df,
+        n=5
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+    market_trends = calculate_market_trends(history_df)
+
+
+    ##democratic_test_trends = democratic_trends.copy()
+
+    ##democratic_test_trends.loc[
+    ## democratic_test_trends["candidate"] == "Gavin Newsom",
+    ## "latest_probability"
+    ##] += 2
+
+    ##democratic_test_trends.loc[
+        ##democratic_test_trends["candidate"] == "Alexandria Ocasio-Cortez",
+        ##"latest_probability"
+    ##] -= 2
+
+    ##democratic_test_trends.loc[
+    ## democratic_test_trends["candidate"] == "Pete Buttigieg",
+        ##"latest_probability"
+    ##] += 1
+
+    ##democratic_test_trends["probability_change"] = (
+    ## democratic_test_trends["latest_probability"]
+    ## - democratic_test_trends["start_probability"]
+    ##)
+
+    ##democratic_test_trends["trend"] = np.select(
+        ##[
+        ## democratic_test_trends["probability_change"] > 0,
+            ##democratic_test_trends["probability_change"] < 0
+        ##],
+        ##[
+        ## "Up",
+        ## "Down"
+        ##],
+        ##default="Unchanged"
+    ##)
+
+    def get_homepage_market_summary(df):
+        """
+        Return the leading USA election, global election,
+        and geopolitical market for the Home page.
+        """
+
+        if df is None or df.empty:
+            return {
+                "usa": None,
+                "global": None,
+                "geopolitical": None
+            }
+
+        data = df.copy()
+
+        data["probability"] = pd.to_numeric(
+            data["probability"],
+            errors="coerce"
+        )
+
+        data["volume"] = pd.to_numeric(
+            data["volume"],
+            errors="coerce"
+        )
+
+        data["date"] = pd.to_datetime(
+            data["date"],
+            errors="coerce"
+        )
+
+        data = data.dropna(
+            subset=["date", "probability"]
+        )
+
+        if data.empty:
+            return {
+                "usa": None,
+                "global": None,
+                "geopolitical": None
+            }
+
+        latest_date = data["date"].max()
+
+        def build_market(category_df):
+
+            if category_df.empty:
+                return None
+
+            latest = category_df[
+                category_df["date"] == category_df["date"].max()
+            ].copy()
+
+            if latest.empty:
+                return None
+
+            # Highest probability market = leader
+            row = latest.sort_values(
+                "probability",
+                ascending=False
+            ).iloc[0]
+
+            market_name = row["market_name"]
+
+            leader = row.get("candidate", None)
+
+            if pd.isna(leader) or str(leader).strip() == "":
+                leader = market_name
+
+            volume = row.get("volume", 0)
+
+            if pd.isna(volume):
+                volume = 0
+
+            # ----------------------------------------------------
+            # Find the closest observation to one week ago
+            # ----------------------------------------------------
+
+            market_history = category_df[
+                category_df["market_name"] == market_name
+            ].copy()
+
+            target_date = latest_date - pd.Timedelta(days=7)
+
+            market_history["date_distance"] = (
+                market_history["date"] - target_date
+            ).abs()
+
+            last_week_row = market_history.sort_values(
+                "date_distance"
+            ).iloc[0]
+
+            last_week_probability = last_week_row[
+                "probability"
+            ]
+
+            trend_change = (
+                row["probability"]
+                - last_week_probability
+            )
+
+            return {
+                "market_name": market_name,
+                "leader": leader,
+                "probability": row["probability"],
+                "volume": volume,
+                "trend_change": trend_change,
+                "last_week_probability": last_week_probability
+            }
+
+        # ========================================================
+        # USA ELECTION
+        # ========================================================
+
+        usa_df = data[
             data["election_country"]
             .astype(str)
             .str.upper()
@@ -6134,72 +6109,97 @@ def get_homepage_market_summary(df):
                 "US",
                 "UNITED STATES"
             ])
+        ].copy()
+
+        usa_summary = build_market(usa_df)
+
+        # ========================================================
+        # GLOBAL ELECTION
+        # ========================================================
+
+        global_df = data[
+            (
+                data["market_category"]
+                .astype(str)
+                .str.lower()
+                .str.contains("election", na=False)
+            )
+            &
+            ~(
+                data["election_country"]
+                .astype(str)
+                .str.upper()
+                .isin([
+                    "USA",
+                    "US",
+                    "UNITED STATES"
+                ])
+            )
+        ].copy()
+
+        global_summary = build_market(global_df)
+
+        # ========================================================
+        # GEOPOLITICAL
+        # ========================================================
+
+        geopolitical_df = data[
+            data["market_category"]
+            .astype(str)
+            .str.lower()
+            .str.contains(
+                "geopolitical",
+                na=False
+            )
+        ].copy()
+
+        geopolitical_summary = build_market(
+            geopolitical_df
         )
-    ].copy()
 
-    global_summary = build_market(global_df)
-
-    # ========================================================
-    # GEOPOLITICAL
-    # ========================================================
-
-    geopolitical_df = data[
-        data["market_category"]
-        .astype(str)
-        .str.lower()
-        .str.contains(
-            "geopolitical",
-            na=False
-        )
-    ].copy()
-
-    geopolitical_summary = build_market(
-        geopolitical_df
-    )
-
-    return {
-        "usa": usa_summary,
-        "global": global_summary,
-        "geopolitical": geopolitical_summary
-    }
+        return {
+            "usa": usa_summary,
+            "global": global_summary,
+            "geopolitical": geopolitical_summary
+        }
 
 
-##election_summary.to_csv(
-    ##"election_summary.csv",
-    ##index=False
-##)
+    ##election_summary.to_csv(
+        ##"election_summary.csv",
+        ##index=False
+    ##)
 
-##election_daily_summary.to_csv(
-    ##"election_daily_summary.csv",
-    ##index=False
-##)
-
-
-##rank_movement_summary.to_csv(
-    ##"rank_movement_summary.csv",
-    ##index=False
-##)
-
-##daily_leader.to_csv(
-    ##"daily_leader.csv",
-    ##index=False
-##)
+    ##election_daily_summary.to_csv(
+        ##"election_daily_summary.csv",
+        ##index=False
+    ##)
 
 
-##candidate_history_df.to_csv(
-    ##"candidate_history.csv",
-    ##index=False
-##)
+    ##rank_movement_summary.to_csv(
+        ##"rank_movement_summary.csv",
+        ##index=False
+    ##)
 
-##candidate_daily_rank.to_csv(
-    ##"candidate_daily_rank.csv",
-    ##index=False
-##)
+    ##daily_leader.to_csv(
+        ##"daily_leader.csv",
+        ##index=False
+    ##)
 
-##daily_leader_gap.to_csv(
-    ##"daily_leader_gap.csv",
-    ##index=False
-##)
+
+    ##candidate_history_df.to_csv(
+        ##"candidate_history.csv",
+        ##index=False
+    ##)
+
+    ##candidate_daily_rank.to_csv(
+        ##"candidate_daily_rank.csv",
+        ##index=False
+    ##)
+
+    ##daily_leader_gap.to_csv(
+        ##"daily_leader_gap.csv",
+        ##index=False
+    ##)
 
 
 
@@ -6213,16 +6213,13 @@ def get_homepage_market_summary(df):
 
 
 
-##final_df.to_csv(
-   ## "election_price_history.csv",
-    ##index=False
-##)
+    ##final_df.to_csv(
+    ## "election_price_history.csv",
+        ##index=False
+    ##)
 
 
-##kpis = calculate_kpis(final_df)
-
-
-
+    ##kpis = calculate_kpis(final_df)
 
 
 
@@ -6233,4 +6230,7 @@ def get_homepage_market_summary(df):
 
 
 
-##final_df.to_csv("election_data.csv", index=False)
+
+
+
+    ##final_df.to_csv("election_data.csv", index=False)
