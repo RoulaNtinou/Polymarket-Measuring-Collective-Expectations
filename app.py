@@ -148,11 +148,6 @@ history_df = load_data(
 
 
 
-
-
-
-
-
 # DEBUG: Check AOC Democratic Nomination history only
 
 aoc_nomination = history_df[
@@ -238,6 +233,7 @@ else:
     start_date = default_start_date
     end_date = max_date
 
+
 # --------------------------------------------------------
 # Apply date filter
 # --------------------------------------------------------
@@ -246,6 +242,47 @@ filtered_history_df = history_df[
     (history_df["date"].dt.date >= start_date) &
     (history_df["date"].dt.date <= end_date)
 ].copy()
+
+# --------------------------------------------------------
+# Include the latest available observation on or before
+# the selected end date for markets missing from the period
+# --------------------------------------------------------
+
+latest_before_end = (
+    history_df[
+        (history_df["date"].dt.date <= end_date)
+    ]
+    .sort_values("date")
+    .drop_duplicates(
+        subset=["market_id", "event"],
+        keep="last"
+    )
+)
+
+if not latest_before_end.empty:
+    existing_markets = set(
+        zip(
+            filtered_history_df["market_id"].astype(str),
+            filtered_history_df["event"].astype(str)
+        )
+    )
+
+    latest_before_end["_market_key"] = list(
+        zip(
+            latest_before_end["market_id"].astype(str),
+            latest_before_end["event"].astype(str)
+        )
+    )
+
+    missing_markets = latest_before_end[
+        ~latest_before_end["_market_key"].isin(existing_markets)
+    ].drop(columns=["_market_key"])
+
+    filtered_history_df = pd.concat(
+        [filtered_history_df, missing_markets],
+        ignore_index=True
+    )
+
 
 # ------------------------------------------------------------
 # Elections
@@ -533,21 +570,14 @@ filtered_df = filter_markets(
 
 
 
+
 # ============================================================
 # DATE FILTER
 # ============================================================
 
 filtered_df = filtered_df[
-    (filtered_df["date"].dt.date >= start_date)
-    &
-    (filtered_df["date"].dt.date <= end_date)
+    filtered_df["date"].dt.date <= end_date
 ].copy()
-
-
-
-
-
-
 
 # ============================================================
 # EMPTY DATA CHECK
@@ -556,7 +586,7 @@ filtered_df = filtered_df[
 if filtered_df.empty:
 
     st.warning(
-        "No markets match the selected filters."
+        "No market history is available on or before the selected end date."
     )
 
     st.stop()
@@ -4968,34 +4998,118 @@ elif is_nomination:
 
 
 
+    # ------------------------------------------------
     # Candidate trends
+    # ------------------------------------------------
+
+    # Preserve the selected nomination's candidate markets,
+    # using full history so a missing observation within the
+    # selected period does not remove the candidate.
+
     trend_history = filter_markets(
-        filtered_history_df,
+        history_df,
         market_category="US Elections",
         election_type=selected_election_type,
         election_subtype=selected_subtype
     )
+    # TEMPORARY CHECK: Compare probabilities at selected period boundaries
+    debug_source = trend_history.copy()
+    debug_source["date"] = pd.to_datetime(debug_source["date"])
+    debug_source["probability"] = pd.to_numeric(
+        debug_source["probability"], errors="coerce"
+    )
 
+    start_cutoff = pd.Timestamp("2026-08-27")
+    end_cutoff = pd.Timestamp("2026-10-01")
 
+    before_start = (
+        debug_source[debug_source["date"] < start_cutoff]
+        .sort_values("date")
+        .groupby(["candidate", "event"])
+        .tail(1)[["candidate", "event", "date", "probability"]]
+        .rename(columns={
+            "date": "Start observation date",
+            "probability": "Start probability"
+        })
+    )
 
+    before_end = (
+        debug_source[debug_source["date"] < end_cutoff]
+        .sort_values("date")
+        .groupby(["candidate", "event"])
+        .tail(1)[["candidate", "event", "date", "probability"]]
+        .rename(columns={
+            "date": "End observation date",
+            "probability": "End probability"
+        })
+    )
 
+    debug_check = before_start.merge(
+        before_end,
+        on=["candidate", "event"],
+        how="outer"
+    )
+
+    debug_check["Calculated change"] = (
+        debug_check["End probability"]
+        - debug_check["Start probability"]
+    )
+
+    st.subheader("Temporary check: Selected-period changes")
+    st.dataframe(
+        debug_check.sort_values("candidate"),
+        width="stretch",
+        hide_index=True
+    )
+    st.write("Earliest date:", debug_source["date"].min())
+    st.write("Latest date:", debug_source["date"].max())
+
+    st.write(
+        "Observations after 26 August:",
+        len(debug_source[debug_source["date"] >= "2026-08-27"])
+    )
+
+    st.write(
+        "Observations after 26 August by candidate:",
+        debug_source[debug_source["date"] >= "2026-08-27"]
+        .groupby("candidate")["date"]
+        .agg(["min", "max", "count"])
+        .sort_values("count", ascending=False)
+    )
+
+    period_data = debug_source[
+        (debug_source["date"] >= "2026-08-27") &
+        (debug_source["date"] < "2026-10-01")
+    ]
+
+    st.write("Observations between 27 Aug and 30 Sep:", len(period_data))
+
+    st.write(
+        "Available observation dates in selected period:",
+        sorted(period_data["date"].dt.strftime("%Y-%m-%d").unique())
+    )
+
+    st.write(
+        "All history observations between 27 Aug and 30 Sep:",
+        len(
+            history_df[
+                (pd.to_datetime(history_df["date"]) >= "2026-08-27") &
+                (pd.to_datetime(history_df["date"]) < "2026-10-01")
+            ]
+        )
+    )
 
     trends = get_candidate_trends(
         trend_history,
-        full_history=history_df
+        full_history=history_df,
+        selected_start_date=start_date,
+        selected_end_date=end_date
     )
 
-
-
-
-
     if not trends.empty:
-
-
         # ------------------------------------------------
         # Sort by latest probability
         # ------------------------------------------------
-
         ranking = (
             trends
             .sort_values(
@@ -5072,8 +5186,8 @@ elif is_nomination:
                 "entrance_date",
                 "latest_date",
                 "latest_probability",
-                "probability_change",
                 "weekly_probability_change",
+                "selected_date_probability_change",
                 "trend",
                 "latest_volume"
             ]
@@ -5084,8 +5198,8 @@ elif is_nomination:
                 "entrance_date": "Entrance Date",
                 "latest_date": "Last Date",
                 "latest_probability": "Probability",
-                "probability_change": "Probability Change",
                 "weekly_probability_change": "Weekly Change",
+                "selected_date_probability_change": "Change vs selected date",
                 "trend": "Trend",
                 "latest_volume": "Volume"
             }
@@ -5113,7 +5227,8 @@ elif is_nomination:
             )
         )
 
-        ranking["Probability Change"] = ranking["Probability Change"].map(
+
+        ranking["Weekly Change"] = ranking["Weekly Change"].map(
             lambda x: (
                 f"{x:+.1f} pp"
                 if pd.notna(x)
@@ -5121,11 +5236,13 @@ elif is_nomination:
             )
         )
 
-        ranking["Weekly Change"] = ranking["Weekly Change"].map(
-            lambda x: (
-                f"{x:+.1f} pp"
-                if pd.notna(x)
-                else "N/A"
+        ranking["Change vs selected date"] = (
+            ranking["Change vs selected date"].map(
+                lambda x: (
+                    f"{x:+.1f} pp"
+                    if pd.notna(x)
+                    else "N/A"
+                )
             )
         )
         ranking["Volume"] = ranking["Volume"].map(
@@ -5514,25 +5631,3 @@ elif is_geopolitical:
 
     else:
         st.info("No geopolitical markets available.")
-
-
-
-
-# ============================================================
-# DEBUG / DATA INFO
-# ============================================================
-
-##with st.expander("Data information"):
-
-    ##st.write(
-       ## f"Rows after filtering: {len(filtered_df):,}"
-    ##)
-
-    ##st.write(
-       ## f"Unique markets: "
-        ##f"{filtered_df['market_id'].nunique():,}"
-    ##)
-
-    ##st.write(
-        ##f"Latest date: {latest_date}"
-    ##)

@@ -3708,25 +3708,29 @@ def get_candidate_ranking(df):
 
 
 
-def get_candidate_trends(df, full_history=None):
-    """
-    Calculate candidate-level probability trends.
 
-    Probability Change:
-        Latest probability minus the first available
-        probability within the selected calendar period.
+
+def get_candidate_trends(
+    df,
+    full_history=None,
+    selected_start_date=None,
+    selected_end_date=None
+):
+    """
+    Probability:
+        Latest observation on or before selected end date.
 
     Weekly Change:
-        Latest probability minus the latest available
-        probability approximately one week earlier.
+        Latest probability minus the latest observation on or
+        before seven days before the latest history date.
+        Available only for the default seven-day period.
 
-    Entrance Date:
-        First date this exact market appears in the
-        full historical dataset.
+    Change vs selected date:
+        Latest observation on or before selected end date
+        minus latest observation on or before selected start date.
 
-    Markets are identified by BOTH market_id and event,
-    because the same market_id can appear with different
-    event questions in the dataset.
+    Trend:
+        Based on Change vs selected date.
     """
 
     if df is None or df.empty:
@@ -3742,8 +3746,7 @@ def get_candidate_trends(df, full_history=None):
     ]
 
     missing_columns = [
-        col
-        for col in required_columns
+        col for col in required_columns
         if col not in df.columns
     ]
 
@@ -3752,137 +3755,160 @@ def get_candidate_trends(df, full_history=None):
             f"Missing required columns: {missing_columns}"
         )
 
+    # ============================================================
+    # 1. PREPARE DATA
+    # ============================================================
+
     data = df.copy()
 
-
-
-    # ============================================================
-    # 1. ENSURE CORRECT DATA TYPES
-    # ============================================================
-
     data["date"] = pd.to_datetime(
-        data["date"],
-        errors="coerce"
+        data["date"], errors="coerce"
     )
 
     data["probability"] = pd.to_numeric(
-        data["probability"],
-        errors="coerce"
+        data["probability"], errors="coerce"
     )
 
     data["volume"] = pd.to_numeric(
-        data["volume"],
-        errors="coerce"
+        data["volume"], errors="coerce"
     )
 
-    data["market_id"] = (
-        data["market_id"]
-        .astype(str)
-        .str.strip()
-    )
-
-    data["event"] = (
-        data["event"]
-        .astype(str)
-        .str.strip()
-    )
+    for col in ["candidate", "market_id", "event"]:
+        data[col] = data[col].astype(str).str.strip()
 
     data = data.dropna(
-        subset=["date"]
+        subset=["date", "probability"]
     )
-
 
     if data.empty:
         return pd.DataFrame()
 
+    data["_market_key"] = (
+        data["candidate"] + "||" + data["event"]
+    )
+
+    # Preserve the market universe from the selected election view.
+    market_universe = data[
+        ["_market_key", "candidate", "market_id", "event"]
+    ].drop_duplicates("_market_key")
+
+    # Use full history for historical comparisons.
+    source = (
+        full_history.copy()
+        if full_history is not None
+        else data.copy()
+    )
+
+    source["date"] = pd.to_datetime(
+        source["date"], errors="coerce"
+    )
+
+    source["probability"] = pd.to_numeric(
+        source["probability"], errors="coerce"
+    )
+
+    source["volume"] = pd.to_numeric(
+        source["volume"], errors="coerce"
+    )
+
+    for col in ["candidate", "market_id", "event"]:
+        source[col] = source[col].astype(str).str.strip()
+
+    source = source.dropna(
+        subset=["date", "probability"]
+    )
+
+    source["_market_key"] = (
+        source["candidate"] + "||" + source["event"]
+    )
+
+    # Keep only markets belonging to this view.
+    source = source[
+        source["_market_key"].isin(
+            market_universe["_market_key"]
+        )
+    ].copy()
+
+    if source.empty:
+        return pd.DataFrame()
+
     # ============================================================
-    # 2. CREATE UNIQUE MARKET KEY
+    # 2. DETERMINE SELECTED PERIOD BOUNDARIES
     # ============================================================
 
-    data["_market_key"] = (
-        data["candidate"].astype(str)
-        + "||"
-        + data["event"].astype(str)
+    latest_history_date = source["date"].max()
+    earliest_history_date = source["date"].min()
+
+    if selected_start_date is None:
+        selected_start_date = earliest_history_date.date()
+
+    if selected_end_date is None:
+        selected_end_date = latest_history_date.date()
+
+    start_cutoff = (
+        pd.Timestamp(selected_start_date).normalize()
+        + pd.Timedelta(days=1)
+    )
+
+    end_cutoff = (
+        pd.Timestamp(selected_end_date).normalize()
+        + pd.Timedelta(days=1)
     )
 
     # ============================================================
-    # 3. SELECTED PERIOD
+    # 3. LATEST PROBABILITY ON OR BEFORE SELECTED END DATE
     # ============================================================
 
-    start_date = data["date"].min()
-    latest_date = data["date"].max()
-
-    # ============================================================
-    # 4. LATEST OBSERVATION FOR EACH MARKET
-    # ============================================================
+    end_source = source[
+        source["date"] < end_cutoff
+    ].copy()
 
     latest_data = (
-        data
+        end_source
         .sort_values("date")
-        .drop_duplicates(
-            subset=["_market_key"],
-            keep="last"
-        )
-        .copy()
+        .drop_duplicates("_market_key", keep="last")
     )
 
-
-
-
-    latest_prob = (
-        latest_data[
-            [
-                "_market_key",
-                "market_id",
-                "candidate",
-                "event",
-                "date",
-                "probability",
-                "volume"
-            ]
+    latest_prob = latest_data[
+        [
+            "_market_key",
+            "market_id",
+            "candidate",
+            "event",
+            "date",
+            "probability",
+            "volume"
         ]
-        .rename(
-            columns={
-                "date": "latest_date",
-                "probability": "latest_probability",
-                "volume": "latest_volume"
-            }
-        )
+    ].rename(
+        columns={
+            "date": "latest_date",
+            "probability": "latest_probability",
+            "volume": "latest_volume"
+        }
     )
 
     # ============================================================
-    # 5. FIRST AVAILABLE OBSERVATION WITHIN SELECTED PERIOD
+    # 4. BASELINE PROBABILITY ON OR BEFORE SELECTED START DATE
     # ============================================================
+
+    start_source = source[
+        source["date"] < start_cutoff
+    ].copy()
 
     start_data = (
-        data
+        start_source
         .sort_values("date")
-        .drop_duplicates(
-            subset=["_market_key"],
-            keep="first"
-        )
-        .copy()
+        .drop_duplicates("_market_key", keep="last")
     )
 
-    start_prob = (
-        start_data[
-            [
-                "_market_key",
-                "date",
-                "probability"
-            ]
-        ]
-        .rename(
-            columns={
-                "date": "period_start_date",
-                "probability": "start_probability"
-            }
-        )
+    start_prob = start_data[
+        ["_market_key", "date", "probability"]
+    ].rename(
+        columns={
+            "date": "period_start_date",
+            "probability": "start_probability"
+        }
     )
-
-    # ============================================================
-    # 6. MERGE START AND LATEST
-    # ============================================================
 
     trends = latest_prob.merge(
         start_prob,
@@ -3890,273 +3916,114 @@ def get_candidate_trends(df, full_history=None):
         how="left"
     )
 
-    # ============================================================
-    # 7. PROBABILITY CHANGE
-    # ============================================================
-
     trends["probability_change"] = (
         trends["latest_probability"]
         - trends["start_probability"]
     )
 
-    # ============================================================
-    # 8. MARKET ENTRANCE DATE
-    # ============================================================
+    trends["selected_date_probability"] = (
+        trends["start_probability"]
+    )
 
-    if full_history is not None:
-
-        entrance_source = full_history.copy()
-
-        entrance_source["date"] = pd.to_datetime(
-            entrance_source["date"],
-            errors="coerce"
-        )
-
-        entrance_source["market_id"] = (
-            entrance_source["market_id"]
-            .astype(str)
-            .str.strip()
-        )
-
-        entrance_source["event"] = (
-            entrance_source["event"]
-            .astype(str)
-            .str.strip()
-        )
-        entrance_source["candidate"] = (
-            entrance_source["candidate"]
-            .astype(str)
-            .str.strip()
-        )
-
-        entrance_source["_market_key"] = (
-            entrance_source["candidate"].astype(str)
-            + "||"
-            + entrance_source["event"]
-        )
-
-        entrance_dates = (
-            entrance_source
-            .dropna(subset=["date"])
-            .groupby("_market_key")["date"]
-            .min()
-            .reset_index()
-            .rename(
-                columns={
-                    "date": "entrance_date"
-                }
-            )
-        )
-
-        trends = trends.merge(
-            entrance_dates,
-            on="_market_key",
-            how="left"
-        )
-
-    else:
-
-        trends["entrance_date"] = (
-            trends["period_start_date"]
-        )
+    trends["selected_date_probability_change"] = (
+        trends["latest_probability"]
+        - trends["start_probability"]
+    )
 
     # ============================================================
-    # 9. WEEKLY PROBABILITY CHANGE
+    # 5. MARKET ENTRANCE DATE
     # ============================================================
 
-    weekly_source = (
-        full_history
-        if full_history is not None
-        else data
-    ).copy()
-
-    weekly_source["date"] = pd.to_datetime(
-        weekly_source["date"],
-        errors="coerce"
-    )
-
-    weekly_source["market_id"] = (
-        weekly_source["market_id"]
-        .astype(str)
-        .str.strip()
-    )
-
-    weekly_source["event"] = (
-        weekly_source["event"]
-        .astype(str)
-        .str.strip()
-    )
-
-    weekly_source["candidate"] = (
-        weekly_source["candidate"]
-        .astype(str)
-        .str.strip()
-    )
-
-    weekly_source["probability"] = pd.to_numeric(
-        weekly_source["probability"],
-        errors="coerce"
-    )
-
-    weekly_source["_market_key"] = (
-        weekly_source["candidate"].astype(str)
-        + "||"
-        + weekly_source["event"]
-    )
-   # ------------------------------------------------------------
-   # Find the latest available observation for EACH market
-   # ------------------------------------------------------------
-
-    latest_market_dates = (
-        trends[
-            [
-               "_market_key",
-               "latest_date",
-               "latest_probability"
-            ]
-        ]
-        .copy()
-    )
-
-    # ------------------------------------------------------------
-    # For each market, find the latest observation that is
-    # available on or before 7 days before THAT MARKET'S
-    # latest observation.
-    # ------------------------------------------------------------
-
-    weekly_results = []
-
-    for _, market in latest_market_dates.iterrows():
-
-        market_key = market["_market_key"]
-        market_latest_date = market["latest_date"]
-
-        market_history = weekly_source[
-            weekly_source["_market_key"] == market_key
-        ].copy()
-
-        if market_history.empty:
-            weekly_results.append({
-                "_market_key": market_key,
-                "week_ago_probability": np.nan
-            })
-            continue
-
-        weekly_cutoff = (
-        market_latest_date
-        - pd.Timedelta(days=7)
-        )
-
-        previous_data = market_history[
-            market_history["date"] <= weekly_cutoff
-        ].copy()
-
-        if previous_data.empty:
-            weekly_results.append({
-                "_market_key": market_key,
-                "week_ago_probability": np.nan
-            })
-            continue
-
-        previous_observation = (
-            previous_data
-            .sort_values("date")
-            .iloc[-1]
-        )
-
-        weekly_results.append({
-            "_market_key": market_key,
-            "week_ago_probability":
-                previous_observation["probability"]
-        })
-
-    weekly_data = pd.DataFrame(
-        weekly_results
+    entrance_dates = (
+        source.groupby("_market_key")["date"]
+        .min()
+        .reset_index()
+        .rename(columns={"date": "entrance_date"})
     )
 
     trends = trends.merge(
-        weekly_data,
+        entrance_dates,
+        on="_market_key",
+        how="left"
+    )
+
+    # ============================================================
+    # 6. WEEKLY CHANGE
+    # ============================================================
+
+    # Match the default date range used by the sidebar.
+    latest_day = latest_history_date.date()
+    earliest_day = earliest_history_date.date()
+
+    default_start = max(
+        earliest_day,
+        latest_day - pd.Timedelta(days=7)
+    )
+
+    is_default_week = (
+        selected_start_date == default_start
+        and selected_end_date == latest_day
+    )
+
+    weekly_cutoff = (
+        latest_history_date.normalize()
+        - pd.Timedelta(days=7)
+    )
+
+    weekly_baseline_source = source[
+        source["date"] < (
+            weekly_cutoff + pd.Timedelta(days=1)
+        )
+    ].copy()
+
+    weekly_baseline = (
+        weekly_baseline_source
+        .sort_values("date")
+        .drop_duplicates("_market_key", keep="last")
+        [["_market_key", "probability"]]
+        .rename(
+            columns={"probability": "week_ago_probability"}
+        )
+    )
+
+    trends = trends.merge(
+        weekly_baseline,
         on="_market_key",
         how="left"
     )
 
     trends["weekly_probability_change"] = (
-            trends["latest_probability"]
-            - trends["week_ago_probability"]
+        trends["latest_probability"]
+        - trends["week_ago_probability"]
     )
 
+    if not is_default_week:
+        trends["weekly_probability_change"] = np.nan
+
     # ============================================================
-    # 10. TREND CLASSIFICATION
+    # 7. TREND FOLLOWS CHANGE VS SELECTED DATE
     # ============================================================
 
-    rounded_weekly_change = (
-        trends["weekly_probability_change"]
-        .round(1)
-    )
-
-    # Treat changes that round to 0.0 as unchanged
-    rounded_weekly_change = rounded_weekly_change.mask(
-        rounded_weekly_change == 0,
-        0
+    trend_change = (
+        trends["selected_date_probability_change"].round(1)
     )
 
     trends["trend"] = np.select(
         [
-            rounded_weekly_change > 0,
-            rounded_weekly_change < 0
+            trend_change > 0,
+            trend_change < 0
         ],
-        [
-            "Up",
-            "Down"
-        ],
+        ["Up", "Down"],
         default="Unchanged"
     )
 
-    # ============================================================
-    # 11. MARKET STATUS
-    # ============================================================
-
-    # Markets that entered after the selected period started
-    # do not have a meaningful Probability Change.
     trends.loc[
-        trends["entrance_date"] > start_date,
-        "probability_change"
-    ] = np.nan
-
-    # A market that has no observation 7 days before its
-    # latest observation has no meaningful Weekly Change.
-    trends.loc[
-        trends["week_ago_probability"].isna(),
-        "weekly_probability_change"
-    ] = np.nan
-
-    # Markets whose latest observation is before the end of
-    # the selected period are considered to have left the market.
-    trends.loc[
-        trends["latest_date"] < latest_date,
-        "weekly_probability_change"
-    ] = np.nan
-
-    trends.loc[
-        trends["latest_date"] < latest_date,
+        trend_change.isna(),
         "trend"
-    ] = "Left Market"
-
-    # Markets that are still active but have no week-ago
-    # observation are considered New.
-    trends.loc[
-        (trends["latest_date"] == latest_date)
-        & (trends["week_ago_probability"].isna()),
-        "trend"
-    ] = "New"
+    ] = "N/A"
 
     # ============================================================
-    # 12. DEBUG
-    # ============================================================
-
-
-    # ============================================================
-    # 13. SORT
+    # 8. SORT AND RETURN
     # ============================================================
 
     trends = (
@@ -4168,24 +4035,23 @@ def get_candidate_trends(df, full_history=None):
         .reset_index(drop=True)
     )
 
-    # ============================================================
-    # 14. FINAL OUTPUT
-    # ============================================================
-
     return trends[
-    [
-        "candidate",
-        "market_id",
-        "entrance_date",
-        "latest_date",
-        "start_probability",
-        "latest_probability",
-        "probability_change",
-        "weekly_probability_change",
-        "trend",
-        "latest_volume"
+        [
+            "candidate",
+            "market_id",
+            "entrance_date",
+            "latest_date",
+            "start_probability",
+            "latest_probability",
+            "probability_change",
+            "weekly_probability_change",
+            "selected_date_probability",
+            "selected_date_probability_change",
+            "trend",
+            "latest_volume"
+        ]
     ]
-]
+
 
 
 
