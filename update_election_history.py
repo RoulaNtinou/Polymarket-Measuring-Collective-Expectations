@@ -37,12 +37,12 @@ def main():
         return
 
     logger.info("Prepared %s election markets.", len(election_df))
-    ##logger.info("Updating historical data...")
+    logger.info("Updating historical data...")
 
-    ##history_df = capture_and_update_election_history(election_df)
+    history_df = capture_and_update_election_history(election_df)
 
-    ##logger.info("Update complete. Historical records: %s", len(history_df))
-    ##logger.info("File: election_market_history.csv")
+    logger.info("Update complete. Historical records: %s", len(history_df))
+    logger.info("File: election_market_history.csv")
 
 
 if __name__ == "__main__":

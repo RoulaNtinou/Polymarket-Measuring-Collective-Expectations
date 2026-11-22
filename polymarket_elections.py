@@ -3783,15 +3783,14 @@ def get_candidate_trends(
     if data.empty:
         return pd.DataFrame()
 
-    data["_market_key"] = (
-        data["candidate"] + "||" + data["event"]
-    )
+    data["_market_key"] = data["market_id"]
 
-    # Preserve the market universe from the selected election view.
     market_universe = data[
         ["_market_key", "candidate", "market_id", "event"]
     ].drop_duplicates("_market_key")
 
+    
+        
     # Use full history for historical comparisons.
     source = (
         full_history.copy()
@@ -3818,9 +3817,7 @@ def get_candidate_trends(
         subset=["date", "probability"]
     )
 
-    source["_market_key"] = (
-        source["candidate"] + "||" + source["event"]
-    )
+    source["_market_key"] = source["market_id"]
 
     # Keep only markets belonging to this view.
     source = source[
@@ -3832,6 +3829,8 @@ def get_candidate_trends(
     if source.empty:
         return pd.DataFrame()
 
+    
+    
     # ============================================================
     # 2. DETERMINE SELECTED PERIOD BOUNDARIES
     # ============================================================
@@ -3863,6 +3862,7 @@ def get_candidate_trends(
         source["date"] < end_cutoff
     ].copy()
 
+    # Latest probability observation on or before the selected end date
     latest_data = (
         end_source
         .sort_values("date")
@@ -3876,16 +3876,40 @@ def get_candidate_trends(
             "candidate",
             "event",
             "date",
-            "probability",
-            "volume"
+            "probability"
         ]
     ].rename(
         columns={
             "date": "latest_date",
-            "probability": "latest_probability",
-            "volume": "latest_volume"
+            "probability": "latest_probability"
         }
     )
+
+    # Latest non-missing volume on or before the selected end date
+    volume_data = (
+        end_source[
+            end_source["volume"].notna()
+        ]
+        .sort_values("date")
+        .drop_duplicates("_market_key", keep="last")
+        [
+            ["_market_key", "volume"]
+        ]
+        .rename(
+            columns={
+                "volume": "latest_volume"
+            }
+        )
+    )
+
+    # Combine probability and volume
+    latest_prob = latest_prob.merge(
+        volume_data,
+        on="_market_key",
+        how="left"
+    )
+
+    
 
     # ============================================================
     # 4. BASELINE PROBABILITY ON OR BEFORE SELECTED START DATE
@@ -3929,6 +3953,21 @@ def get_candidate_trends(
         trends["latest_probability"]
         - trends["start_probability"]
     )
+
+    if "Ron DeSantis" in trends["candidate"].values:
+        print(
+            trends.loc[
+                trends["candidate"] == "Ron DeSantis",
+                [
+                    "candidate",
+                    "period_start_date",
+                    "start_probability",
+                    "latest_date",
+                    "latest_probability",
+                    "selected_date_probability_change"
+                ]
+            ].to_string(index=False)
+        )
 
     # ============================================================
     # 5. MARKET ENTRANCE DATE

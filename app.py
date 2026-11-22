@@ -515,8 +515,6 @@ selected_candidate = st.sidebar.selectbox(
 # ============================================================
 
 
-
-
 filtered_df = filter_markets(
     filtered_history_df,
     market_category=(
@@ -563,8 +561,6 @@ filtered_df = filter_markets(
         else selected_candidate
     )
 )
-
-
 
 
 
@@ -2449,11 +2445,20 @@ is_geopolitical = (
 if selected_candidate != "All":
 
     candidate_history = filtered_df[
-        filtered_df["candidate"] == selected_candidate
+        (filtered_df["candidate_type"] == "candidate")
+        & (filtered_df["election_subtype"] == "General Election")
     ].copy()
 
+    
 
+   
 
+    
+    
+    
+
+    
+    
     # --------------------------------------------------------
     # Candidate selected with Subtype = All
     # --------------------------------------------------------
@@ -3090,6 +3095,65 @@ elif selected_election_type == "US Midterms":
                 subset=["market_id"]
             )
 
+            candidate_ids = latest_markets["market_id"].unique()
+
+            # Diagnostic: check historical coverage for each candidate
+            market_history_check = history_df[
+                history_df["market_id"].isin(candidate_ids)
+            ].copy()
+
+            market_history_check = market_history_check.groupby(
+                ["market_id", "candidate"]
+            ).agg(
+                first_observation=("date", "min"),
+                last_observation=("date", "max"),
+                total_observations=("date", "count"),
+                latest_probability=("probability", "last")
+            ).reset_index()
+
+            st.subheader("Historical Data Diagnostic")
+
+            st.write(
+                "Overall latest date:",
+                history_df["date"].max()
+            )
+
+            st.dataframe(
+                market_history_check,
+                hide_index=True,
+                width="stretch"
+            )
+            
+            # Get each candidate's latest observation on or before end_date
+            end_markets = history_df[
+                (history_df["market_id"].isin(candidate_ids)) &
+                (history_df["date"].dt.date <= end_date)
+            ].copy()
+
+            end_markets = end_markets.sort_values("date")
+
+            end_markets = end_markets.drop_duplicates(
+                subset=["market_id"],
+                keep="last"
+            )
+            end_markets = end_markets[
+                ["market_id", "date", "probability", "volume"]
+            ].rename(
+                columns={
+                    "date": "end_observation_date"
+                }
+            )
+            
+            # Update probabilities and volume without changing candidate list
+            latest_markets = latest_markets.drop(
+                columns=["probability", "volume"]
+            ).merge(
+                end_markets[
+                    ["market_id", "probability", "volume", "end_observation_date"]
+                ],
+                on="market_id",
+                how="left"
+            )
             latest_markets = latest_markets.sort_values(
                 "probability",
                 ascending=False
@@ -3101,37 +3165,106 @@ elif selected_election_type == "US Midterms":
             leader_probability = leader_row["probability"]
             leader_volume = leader_row["volume"]
 
-            one_week_ago = latest_date - pd.Timedelta(days=7)
+            # Weekly change: only show for the default last-week selection
+            if (
+                
+                start_date == (max_date - pd.Timedelta(days=7))
+                and end_date == max_date
+            ):
 
-            previous_markets = history_df[
-                (history_df["election_subtype"] == selected_subtype) &
-                (history_df["date"] == one_week_ago)
+                one_week_ago = latest_date - pd.Timedelta(days=7)
+
+                previous_markets = history_df[
+                    (history_df["market_id"].isin(candidate_ids)) &
+                    (history_df["date"] <= one_week_ago)
+                ].copy()
+
+                previous_markets = previous_markets.sort_values("date")
+
+                previous_markets = previous_markets.drop_duplicates(
+                    subset=["market_id"],
+                    keep="last"
+                )
+
+                previous_markets = previous_markets[
+                    ["market_id", "probability"]
+                ].rename(
+                    columns={
+                        "probability": "previous_probability"
+                    }
+                )
+
+                nomination_table = latest_markets.merge(
+                    previous_markets,
+                    on="market_id",
+                    how="left"
+                )
+
+                nomination_table["weekly_change"] = (
+                    nomination_table["probability"]
+                    - nomination_table["previous_probability"]
+                )
+
+            else:
+                nomination_table = latest_markets.copy()
+                nomination_table["weekly_change"] = float("nan")
+
+            # Change vs selected date
+            start_markets = history_df[
+                (history_df["market_id"].isin(candidate_ids)) &
+                (history_df["date"].dt.date <= start_date)
             ].copy()
 
-            previous_markets = previous_markets[
-                [
-                    "market_id",
-                    "probability"
-                ]
+            start_markets = start_markets.sort_values("date")
+
+            start_markets = start_markets.drop_duplicates(
+                subset=["market_id"],
+                keep="last"
+            )
+
+            start_markets = start_markets[
+                ["market_id", "date", "probability"]
             ].rename(
                 columns={
-                    "probability": "previous_probability"
+                    "date": "start_observation_date",
+                    "probability": "start_probability"
                 }
             )
 
-            nomination_table = latest_markets.merge(
-                previous_markets,
+            nomination_table = nomination_table.merge(
+                start_markets,
                 on="market_id",
                 how="left"
             )
 
-            nomination_table["weekly_change"] = (
+            nomination_table["selected_date_probability_change"] = (
                 nomination_table["probability"]
-                - nomination_table["previous_probability"]
+                - nomination_table["start_probability"]
             )
 
+            # No meaningful comparison when both snapshots use the same observation
+            same_observation = (
+                nomination_table["start_observation_date"]
+                == nomination_table["end_observation_date"]
+            )
+
+            nomination_table.loc[
+                same_observation,
+                "selected_date_probability_change"
+            ] = float("nan")
+
+            
+            # Trend follows the active comparison period
+            if (
+                start_date == (max_date - pd.Timedelta(days=7))
+                and end_date == max_date
+            ):
+                trend_column = "weekly_change"
+            else:
+                trend_column = "selected_date_probability_change"
+
             nomination_table["trend"] = nomination_table[
-                "weekly_change"
+                trend_column
             ].apply(
                 lambda x:
                     "Up" if x > 0
@@ -3244,6 +3377,7 @@ elif selected_election_type == "US Midterms":
                     "state",
                     "probability",
                     "weekly_change",
+                    "selected_date_probability_change",
                     "trend",
                     "volume"
                 ]
@@ -3255,6 +3389,7 @@ elif selected_election_type == "US Midterms":
                     "state": "State",
                     "probability": "Probability",
                     "weekly_change": "Change vs last week",
+                    "selected_date_probability_change": "Change vs selected date",
                     "trend": "Trend",
                     "volume": "Volume"
                 }
@@ -3272,6 +3407,16 @@ elif selected_election_type == "US Midterms":
 
             display_table["Change vs last week"] = (
                 display_table["Change vs last week"]
+                .map(
+                    lambda x:
+                        f"{x:+.1f} pp"
+                        if pd.notna(x)
+                        else "N/A"
+                )
+            )
+
+            display_table["Change vs selected date"] = (
+                display_table["Change vs selected date"]
                 .map(
                     lambda x:
                         f"{x:+.1f} pp"
@@ -3309,6 +3454,10 @@ elif selected_election_type == "US Midterms":
                     ),
                     "Change vs last week": st.column_config.TextColumn(
                         "Change vs last week",
+                        width="small"
+                    ),
+                    "Change vs selected date": st.column_config.TextColumn(
+                        "Change vs selected date",
                         width="small"
                     ),
                     "Trend": st.column_config.TextColumn(
@@ -5012,93 +5161,27 @@ elif is_nomination:
         election_type=selected_election_type,
         election_subtype=selected_subtype
     )
-    # TEMPORARY CHECK: Compare probabilities at selected period boundaries
-    debug_source = trend_history.copy()
-    debug_source["date"] = pd.to_datetime(debug_source["date"])
-    debug_source["probability"] = pd.to_numeric(
-        debug_source["probability"], errors="coerce"
+
+    # Select the most recently updated market for each candidate
+    market_dates = (
+        trend_history
+        .groupby(["candidate", "market_id"])["date"]
+        .max()
+        .reset_index()
     )
 
-    start_cutoff = pd.Timestamp("2026-08-27")
-    end_cutoff = pd.Timestamp("2026-10-01")
-
-    before_start = (
-        debug_source[debug_source["date"] < start_cutoff]
+    latest_market_ids = (
+        market_dates
         .sort_values("date")
-        .groupby(["candidate", "event"])
-        .tail(1)[["candidate", "event", "date", "probability"]]
-        .rename(columns={
-            "date": "Start observation date",
-            "probability": "Start probability"
-        })
+        .drop_duplicates("candidate", keep="last")
     )
 
-    before_end = (
-        debug_source[debug_source["date"] < end_cutoff]
-        .sort_values("date")
-        .groupby(["candidate", "event"])
-        .tail(1)[["candidate", "event", "date", "probability"]]
-        .rename(columns={
-            "date": "End observation date",
-            "probability": "End probability"
-        })
-    )
-
-    debug_check = before_start.merge(
-        before_end,
-        on=["candidate", "event"],
-        how="outer"
-    )
-
-    debug_check["Calculated change"] = (
-        debug_check["End probability"]
-        - debug_check["Start probability"]
-    )
-
-    st.subheader("Temporary check: Selected-period changes")
-    st.dataframe(
-        debug_check.sort_values("candidate"),
-        width="stretch",
-        hide_index=True
-    )
-    st.write("Earliest date:", debug_source["date"].min())
-    st.write("Latest date:", debug_source["date"].max())
-
-    st.write(
-        "Observations after 26 August:",
-        len(debug_source[debug_source["date"] >= "2026-08-27"])
-    )
-
-    st.write(
-        "Observations after 26 August by candidate:",
-        debug_source[debug_source["date"] >= "2026-08-27"]
-        .groupby("candidate")["date"]
-        .agg(["min", "max", "count"])
-        .sort_values("count", ascending=False)
-    )
-
-    period_data = debug_source[
-        (debug_source["date"] >= "2026-08-27") &
-        (debug_source["date"] < "2026-10-01")
-    ]
-
-    st.write("Observations between 27 Aug and 30 Sep:", len(period_data))
-
-    st.write(
-        "Available observation dates in selected period:",
-        sorted(period_data["date"].dt.strftime("%Y-%m-%d").unique())
-    )
-
-    st.write(
-        "All history observations between 27 Aug and 30 Sep:",
-        len(
-            history_df[
-                (pd.to_datetime(history_df["date"]) >= "2026-08-27") &
-                (pd.to_datetime(history_df["date"]) < "2026-10-01")
-            ]
+    trend_history = trend_history[
+        trend_history["market_id"].isin(
+            latest_market_ids["market_id"]
         )
-    )
-
+    ].copy()
+    
     trends = get_candidate_trends(
         trend_history,
         full_history=history_df,
@@ -5279,19 +5362,41 @@ elif is_general_election:
 
     st.subheader("🇺🇸 General Election")
 
+    
     candidate_history = filtered_df[
-        filtered_df["candidate_type"] == "candidate"
+        (filtered_df["candidate_type"] == "candidate")
+        & (filtered_df["election_subtype"] == "General Election")
     ].copy()
 
+    # Select the most recently updated market for each candidate
+    market_dates = (
+        candidate_history
+        .groupby(["candidate", "market_id"])["date"]
+        .max()
+        .reset_index()
+    )
 
+    latest_market_ids = (
+        market_dates
+        .sort_values("date")
+        .drop_duplicates("candidate", keep="last")
+    )
 
+    candidate_history = candidate_history[
+        candidate_history["market_id"].isin(
+            latest_market_ids["market_id"]
+        )
+    ].copy()
 
     trends = get_candidate_trends(
         candidate_history,
-        full_history=history_df
+        full_history=history_df,
+        selected_start_date=start_date,
+        selected_end_date=end_date
     )
 
 
+    
 
     if not trends.empty:
 
@@ -5357,7 +5462,9 @@ elif is_general_election:
 
         chart_data = trends[
             ["candidate", "latest_probability"]
-            ].head(20).copy()
+        ].head(20).copy()
+
+        chart_data["rank"] = range(1, len(chart_data) + 1)
 
         chart_data = chart_data.rename(
             columns={
@@ -5382,7 +5489,10 @@ elif is_general_election:
                 ),
                 y=alt.Y(
                     "Candidate:N",
-                    sort="-x",
+                    sort=alt.EncodingSortField(
+                    field="rank",
+                    order="ascending"
+                    ),
                     title=None
                 ),
                 color=alt.Color(
@@ -5407,6 +5517,8 @@ elif is_general_election:
             )
         )
 
+       
+        
         st.altair_chart(
             chart,
             width="stretch"
@@ -5494,12 +5606,13 @@ elif is_general_election:
         # ------------------------------------------------
         # Candidate table
         # ------------------------------------------------
-
+        
         ranking = trends[
             [
                 "candidate",
                 "latest_probability",
                 "weekly_probability_change",
+                "selected_date_probability_change",
                 "trend",
                 "latest_volume"
             ]
@@ -5510,6 +5623,7 @@ elif is_general_election:
                 "candidate": "Candidate",
                 "latest_probability": "Probability",
                 "weekly_probability_change": "Change vs last week",
+                "selected_date_probability_change": "Change vs selected date",
                 "trend": "Trend",
                 "latest_volume": "Volume"
             }
@@ -5529,9 +5643,24 @@ elif is_general_election:
             )
         )
 
-        ranking["Volume"] = ranking["Volume"].map(
-            lambda x: f"{x / 1_000_000:.1f}M"
+        ranking["Change vs selected date"] = (
+            ranking["Change vs selected date"].map(
+                lambda x: (
+                    f"{x:+.1f} pp"
+                    if pd.notna(x)
+                    else "N/A"
+                )
+            )
         )
+
+        ranking["Volume"] = ranking["Volume"].map(
+            lambda x: (
+                f"{x / 1_000_000:.1f}M"
+                if pd.notna(x)
+                else "N/A"
+            )
+        )
+
 
         st.dataframe(
             ranking,
